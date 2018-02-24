@@ -1,9 +1,17 @@
-#import "RCTBridge.h"
 #import "RCTCamera.h"
 #import "RCTCameraManager.h"
+
+#if __has_include(<React/RCTBridge.h>)
+#import <React/RCTBridge.h>
+#import <React/RCTLog.h>
+#import <React/RCTUtils.h>
+#import <React/RCTEventDispatcher.h>
+#else
+#import "RCTBridge.h"
 #import "RCTLog.h"
 #import "RCTUtils.h"
 #import "RCTEventDispatcher.h"
+#endif
 
 #import "UIView+React.h"
 
@@ -181,9 +189,11 @@
 
 - (void)changePreviewOrientation:(NSInteger)orientation
 {
-    if (self.manager.previewLayer.connection.isVideoOrientationSupported) {
-        self.manager.previewLayer.connection.videoOrientation = orientation;
-    }
+    dispatch_async(self.manager.sessionQueue, ^{
+        if (self.manager.previewLayer.connection.isVideoOrientationSupported) {
+            self.manager.previewLayer.connection.videoOrientation = orientation;
+        }
+    });
 }
 
 @end

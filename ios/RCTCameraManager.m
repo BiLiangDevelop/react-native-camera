@@ -1,9 +1,16 @@
 #import "RCTCameraManager.h"
 #import "RCTCamera.h"
+#if __has_include(<React/RCTBridge.h>)
+#import <React/RCTBridge.h>
+#import <React/RCTLog.h>
+#import <React/RCTUtils.h>
+#import <React/RCTEventDispatcher.h>
+#else
 #import "RCTBridge.h"
-#import "RCTEventDispatcher.h"
-#import "RCTUtils.h"
 #import "RCTLog.h"
+#import "RCTUtils.h"
+#import "RCTEventDispatcher.h"
+#endif
 #import "UIView+React.h"
 #import "NSMutableDictionary+ImageMetadata.m"
 #import <AssetsLibrary/ALAssetsLibrary.h>
@@ -14,6 +21,7 @@
 @interface RCTCameraManager ()
 
 @property (strong, nonatomic) RCTSensorOrientationChecker * sensorOrientationChecker;
+@property (assign, nonatomic) NSInteger* flashMode;
 
 @end
 
@@ -30,11 +38,15 @@ RCT_EXPORT_MODULE();
 - (UIView *)view
 {
   self.session = [AVCaptureSession new];
+  #if !(TARGET_IPHONE_SIMULATOR)
+    self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
+    self.previewLayer.needsDisplayOnBoundsChange = YES;
+  #endif
 
-  self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
-  self.previewLayer.needsDisplayOnBoundsChange = YES;
-
-  return [[RCTCamera alloc] initWithManager:self bridge:self.bridge];
+  if(!self.camera){
+    self.camera = [[RCTCamera alloc] initWithManager:self bridge:self.bridge];
+  }
+  return self.camera;
 }
 
 - (NSDictionary *)constantsToExport
@@ -75,14 +87,20 @@ RCT_EXPORT_MODULE();
                @"video": @(RCTCameraCaptureModeVideo)
                },
            @"CaptureQuality": @{
-               @"low": AVCaptureSessionPresetLow,
-               @"AVCaptureSessionPresetLow": AVCaptureSessionPresetLow,
-               @"medium": AVCaptureSessionPresetMedium,
-               @"AVCaptureSessionPresetMedium": AVCaptureSessionPresetMedium,
-               @"high": AVCaptureSessionPresetHigh,
-               @"AVCaptureSessionPresetHigh": AVCaptureSessionPresetHigh,
-               @"photo": AVCaptureSessionPresetPhoto,
-               @"AVCaptureSessionPresetPhoto": AVCaptureSessionPresetPhoto
+               @"low": @(RCTCameraCaptureSessionPresetLow),
+               @"AVCaptureSessionPresetLow": @(RCTCameraCaptureSessionPresetLow),
+               @"medium": @(RCTCameraCaptureSessionPresetMedium),
+               @"AVCaptureSessionPresetMedium": @(RCTCameraCaptureSessionPresetMedium),
+               @"high": @(RCTCameraCaptureSessionPresetHigh),
+               @"AVCaptureSessionPresetHigh": @(RCTCameraCaptureSessionPresetHigh),
+               @"photo": @(RCTCameraCaptureSessionPresetPhoto),
+               @"AVCaptureSessionPresetPhoto": @(RCTCameraCaptureSessionPresetPhoto),
+               @"480p": @(RCTCameraCaptureSessionPreset480p),
+               @"AVCaptureSessionPreset640x480": @(RCTCameraCaptureSessionPreset480p),
+               @"720p": @(RCTCameraCaptureSessionPreset720p),
+               @"AVCaptureSessionPreset1280x720": @(RCTCameraCaptureSessionPreset720p),
+               @"1080p": @(RCTCameraCaptureSessionPreset1080p),
+               @"AVCaptureSessionPreset1920x1080": @(RCTCameraCaptureSessionPreset1080p)
                },
            @"CaptureTarget": @{
                @"memory": @(RCTCameraCaptureTargetMemory),
@@ -115,6 +133,37 @@ RCT_EXPORT_VIEW_PROPERTY(defaultOnFocusComponent, BOOL);
 RCT_EXPORT_VIEW_PROPERTY(onFocusChanged, BOOL);
 RCT_EXPORT_VIEW_PROPERTY(onZoomChanged, BOOL);
 
+RCT_CUSTOM_VIEW_PROPERTY(captureQuality, NSInteger, RCTCamera) {
+  NSInteger quality = [RCTConvert NSInteger:json];
+  NSString *qualityString;
+  switch (quality) {
+    default:
+    case RCTCameraCaptureSessionPresetHigh:
+      qualityString = AVCaptureSessionPresetHigh;
+      break;
+    case RCTCameraCaptureSessionPresetMedium:
+      qualityString = AVCaptureSessionPresetMedium;
+      break;
+    case RCTCameraCaptureSessionPresetLow:
+      qualityString = AVCaptureSessionPresetLow;
+      break;
+    case RCTCameraCaptureSessionPresetPhoto:
+      qualityString = AVCaptureSessionPresetPhoto;
+      break;
+    case RCTCameraCaptureSessionPreset1080p:
+      qualityString = AVCaptureSessionPreset1920x1080;
+      break;
+    case RCTCameraCaptureSessionPreset720p:
+      qualityString = AVCaptureSessionPreset1280x720;
+      break;
+    case RCTCameraCaptureSessionPreset480p:
+      qualityString = AVCaptureSessionPreset640x480;
+      break;
+  }
+
+  [self setCaptureQuality:qualityString];
+}
+
 RCT_CUSTOM_VIEW_PROPERTY(aspect, NSInteger, RCTCamera) {
   NSInteger aspect = [RCTConvert NSInteger:json];
   NSString *aspectString;
@@ -136,47 +185,48 @@ RCT_CUSTOM_VIEW_PROPERTY(aspect, NSInteger, RCTCamera) {
 
 RCT_CUSTOM_VIEW_PROPERTY(type, NSInteger, RCTCamera) {
   NSInteger type = [RCTConvert NSInteger:json];
-  
+
   self.presetCamera = type;
   if (self.session.isRunning) {
     dispatch_async(self.sessionQueue, ^{
       AVCaptureDevice *currentCaptureDevice = [self.videoCaptureDeviceInput device];
       AVCaptureDevicePosition position = (AVCaptureDevicePosition)type;
       AVCaptureDevice *captureDevice = [self deviceWithMediaType:AVMediaTypeVideo preferringPosition:(AVCaptureDevicePosition)position];
-      
+
       if (captureDevice == nil) {
         return;
       }
-      
+
       self.presetCamera = type;
-      
+
       NSError *error = nil;
       AVCaptureDeviceInput *captureDeviceInput = [AVCaptureDeviceInput deviceInputWithDevice:captureDevice error:&error];
-      
+
       if (error || captureDeviceInput == nil)
       {
         NSLog(@"%@", error);
         return;
       }
-      
+
       [self.session beginConfiguration];
-      
+
       [self.session removeInput:self.videoCaptureDeviceInput];
-      
+
       if ([self.session canAddInput:captureDeviceInput])
       {
         [self.session addInput:captureDeviceInput];
-        
+
         [NSNotificationCenter.defaultCenter removeObserver:self name:AVCaptureDeviceSubjectAreaDidChangeNotification object:currentCaptureDevice];
-        
+
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(subjectAreaDidChange:) name:AVCaptureDeviceSubjectAreaDidChangeNotification object:captureDevice];
         self.videoCaptureDeviceInput = captureDeviceInput;
+        [self setFlashMode];
       }
       else
       {
         [self.session addInput:self.videoCaptureDeviceInput];
       }
-      
+
       [self.session commitConfiguration];
     });
   }
@@ -184,29 +234,33 @@ RCT_CUSTOM_VIEW_PROPERTY(type, NSInteger, RCTCamera) {
 }
 
 RCT_CUSTOM_VIEW_PROPERTY(flashMode, NSInteger, RCTCamera) {
-  AVCaptureDevice *device = [self.videoCaptureDeviceInput device];
-  NSError *error = nil;
-  NSInteger *flashMode = [RCTConvert NSInteger:json];
-  
-  if (![device hasFlash]) return;
-  if (![device lockForConfiguration:&error]) {
-    NSLog(@"%@", error);
-    return;
-  }
-  if (device.hasFlash && [device isFlashModeSupported:flashMode])
-  {
+    self.flashMode = [RCTConvert NSInteger:json];
+    [self setFlashMode];
+}
+
+- (void)setFlashMode {
+    AVCaptureDevice *device = [self.videoCaptureDeviceInput device];
     NSError *error = nil;
-    if ([device lockForConfiguration:&error])
-    {
-      [device setFlashMode:flashMode];
-      [device unlockForConfiguration];
+    
+    if (![device hasFlash]) return;
+    if (![device lockForConfiguration:&error]) {
+        NSLog(@"%@", error);
+        return;
     }
-    else
+    if (device.hasFlash && [device isFlashModeSupported:self.flashMode])
     {
-      NSLog(@"%@", error);
+        NSError *error = nil;
+        if ([device lockForConfiguration:&error])
+        {
+            [device setFlashMode:self.flashMode];
+            [device unlockForConfiguration];
+        }
+        else
+        {
+            NSLog(@"%@", error);
+        }
     }
-  }
-  [device unlockForConfiguration];
+    [device unlockForConfiguration];
 }
 
 RCT_CUSTOM_VIEW_PROPERTY(torchMode, NSInteger, RCTCamera) {
@@ -214,7 +268,7 @@ RCT_CUSTOM_VIEW_PROPERTY(torchMode, NSInteger, RCTCamera) {
     NSInteger *torchMode = [RCTConvert NSInteger:json];
     AVCaptureDevice *device = [self.videoCaptureDeviceInput device];
     NSError *error = nil;
-    
+
     if (![device hasTorch]) return;
     if (![device lockForConfiguration:&error]) {
       NSLog(@"%@", error);
@@ -310,8 +364,6 @@ RCT_EXPORT_METHOD(capture:(NSDictionary *)options
                   reject:(RCTPromiseRejectBlock)reject) {
   NSInteger captureMode = [[options valueForKey:@"mode"] intValue];
   NSInteger captureTarget = [[options valueForKey:@"target"] intValue];
-
-  [self setCaptureQuality:[options valueForKey:@"quality"]];
 
   if (captureMode == RCTCameraCaptureModeStill) {
     [self captureStill:captureTarget options:options resolve:resolve reject:reject];
@@ -414,7 +466,9 @@ RCT_EXPORT_METHOD(hasFlash:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRej
   return;
 #endif
   dispatch_async(self.sessionQueue, ^{
+    self.camera = nil;
     [self.previewLayer removeFromSuperlayer];
+    [self.session commitConfiguration];
     [self.session stopRunning];
     for(AVCaptureInput *input in self.session.inputs) {
       [self.session removeInput:input];
@@ -436,7 +490,7 @@ RCT_EXPORT_METHOD(hasFlash:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRej
         }
       }
     }
-    
+
     [self.session beginConfiguration];
 
     NSError *error = nil;
@@ -472,6 +526,7 @@ RCT_EXPORT_METHOD(hasFlash:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRej
       }
       else if (type == AVMediaTypeVideo) {
         self.videoCaptureDeviceInput = captureDeviceInput;
+        [self setFlashMode];
       }
       [self.metadataOutput setMetadataObjectTypes:self.metadataOutput.availableMetadataObjectTypes];
     }
@@ -954,13 +1009,15 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
 
 - (void)setCaptureQuality:(NSString *)quality
 {
-    if (quality) {
-        [self.session beginConfiguration];
-        if ([self.session canSetSessionPreset:quality]) {
-            self.session.sessionPreset = quality;
+    #if !(TARGET_IPHONE_SIMULATOR)
+        if (quality) {
+            [self.session beginConfiguration];
+            if ([self.session canSetSessionPreset:quality]) {
+                self.session.sessionPreset = quality;
+            }
+            [self.session commitConfiguration];
         }
-        [self.session commitConfiguration];
-    }
+    #endif
 }
 
 @end
